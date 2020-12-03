@@ -1,0 +1,1242 @@
+# -*- coding: utf-8 -*-
+"""
+@Masters project: PROGRESSIVE GROWING OF LEAST SQUARES GENERATIVE ADVERSARIAL NETWORKS
+@File: Main Code File
+@author: Sharif Mansour (500572387)
+"""
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+# Temporary to remove the warnings when doing development
+import warnings
+warnings.filterwarnings("ignore")
+
+# Required for Dataset Preparation. 
+from numpy import asarray, load, ones, zeros
+from numpy.random import randn, randint
+from PIL import Image
+from mtcnn.mtcnn import MTCNN
+from matplotlib import pyplot
+import os
+import cv2
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import figure
+
+#import pydotplus as pydot
+
+# General Libraries.
+from math import sqrt
+import numpy as np
+
+# TensorFlow environment.
+import tensorflow as tf
+# For timing.
+import time
+
+#### Keras tensorflow
+
+from tensorflow.keras.layers import Add, Conv2D, Input, Dense, Layer, LeakyReLU, UpSampling2D, AveragePooling2D, Reshape, Flatten
+from tensorflow.keras import Model, Sequential
+from tensorflow.keras.initializers import RandomNormal
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.constraints import MaxNorm
+from tensorflow.keras import backend
+from tensorflow.keras.utils import plot_model
+
+############## Not keras tensorflow but regular keras needed for FID calculations
+
+import numpy
+from numpy import cov
+from numpy import trace
+from numpy import iscomplexobj
+from scipy.linalg import sqrtm
+from keras.applications.inception_v3 import InceptionV3
+from keras.applications.inception_v3 import preprocess_input
+from skimage.transform import resize
+
+############## For inception score
+
+from math import floor
+from numpy import expand_dims
+from numpy import log
+from numpy import mean
+from numpy import std
+from numpy import exp
+from numpy.random import shuffle
+
+###############################################################################################
+        
+# Training full GAN network
+def train(generator, discriminator, GAN, images, latent_vector, epoches, model_fade, chunk_number, size, sample_Count, images_Folder):
+    
+    chunk_number =  np.array(chunk_number, dtype=np.int16)
+    model_fade = np.array(model_fade, dtype=np.int16)
+    plot_Count = 9
+    
+    # Determine data type
+    print('\nchunk_number data type: ',type(chunk_number[0]))
+    # Initializing GAN Network
+    Gen_Start, Disc_Start, GAN_Start = generator[0][0], discriminator[0][0], GAN[0][0]
+    
+    ###############################################
+    ### Starting model summary
+     
+    save_Model_Summary('First_Gen_Start_Summary_Layer_001.txt', 'First_Gen_Start_Summary_Layer_001.png', Gen_Start)
+    save_Model_Summary('First_Disc_Start_Summary_Layer_001.txt', 'First_Disc_Start_Summary_Layer_001.png', Disc_Start)
+
+    ###############################################
+    
+    global Real_Image_Loss_Total   
+    global Fake_Image_Loss_Total
+    global Generator_Image_Loss_Total
+    global Time_Total
+    critic_Count = 1
+    
+    fade = False
+    
+    ################################
+    
+    # Training
+    # Determine the number of batches during training
+    num_of_batch= int(sample_Count / chunk_number[0])
+    
+    # Number of iterations per training epoch
+    Num_Iterations = num_of_batch * epoches[0]
+    half_chunk_number = int(chunk_number[0] / 2)
+    
+    print("\nchunk_number", chunk_number)
+    print("\nepoches", epoches)
+    print("\nNum_Iterations:", Num_Iterations)
+    print("\half_chunk_number:", half_chunk_number)
+    
+    shape_Generator = Gen_Start.output_shape
+    new_shape =  shape_Generator[1:]
+    
+
+    for t2 in range(Num_Iterations):
+        # Fading in of layers
+        if fade == True:
+            
+            models = [Gen_Start, Disc_Start, GAN_Start]
+            # weight values
+            alpha = t2 / float(Num_Iterations - 1)
+            # update the weight for each model
+            for j in models:
+                for k in j.layers:
+                    if isinstance(k, mergingLayers):
+                        backend.set_value(k.alpha, alpha)
+                        print('\nbackend.set_value(k.weight, weight):', backend.set_value(k.alpha, alpha))
+        
+        ####### Images        
+        randomRealImages = randint(0, totalnumImages-1, half_chunk_number)
+        array_randomRealImages = np.array(randomRealImages)
+        image_set = list()
+        image_size_scaling = []
+        currentImage = []
+        new_images = []
+        
+        for h in range(half_chunk_number):
+            currentImage = load_Image(images_Folder, array_randomRealImages[h], image_size, 'No', sample_Count)
+            new_images = cv2.resize(currentImage, new_shape[0:2], interpolation=cv2.INTER_NEAREST)
+            image_set.append(new_images)
+            
+        image_size_scaling = asarray(image_set)
+         
+        ######################
+        
+        # Getting images equal to half the batch number
+        Real_Images =image_size_scaling
+        Target1 = ones((half_chunk_number, 1))
+        
+        latent_Vector = randn(lat_Vector * half_chunk_number).reshape(half_chunk_number, lat_Vector)
+        Fake_Images = Gen_Start.predict(latent_Vector)
+        Target2= zeros((half_chunk_number, 1))
+        
+        train_Batch([Disc_Start,GAN_Start, Gen_Start], Fake_Images, Real_Images, Target2, Target1, chunk_number[0], t2, critic_Count, half_chunk_number, images_Folder, image_size, sample_Count, new_shape)
+
+        # Saving generated images.       
+        if t2 % 1000 == 0:
+            save_Plots(Gen_Start, plot_Count, 'N_' + '0', str(t2), Images_Generated_Folder, 'No')
+            Loss_Plots(Real_Image_Loss_Total, Fake_Image_Loss_Total, Generator_Image_Loss_Total, Gen_Start, 'N_' + '0' + 'Current_Iteration' + str(t2))
+       
+       ################################  
+       
+    ##############################################
+    
+    # Saving Images
+    save_Plots(Gen_Start, plot_Count, 'N_' + '0', 'None', Images_Generated_Folder, 'No')
+    
+    # Saving Loss Plots - the Generator_Image_Loss_Total is the fake image loss
+    Loss_Plots(Real_Image_Loss_Total, Fake_Image_Loss_Total, Generator_Image_Loss_Total, Gen_Start, 'N_' + '0')
+    # Time taken to grow layers
+    time_To_Complete = time.time() - full_Project_Training_Time_Start
+    Time_Total.append(time_To_Complete)
+    Time_Plots(Time_Total, Gen_Start, 'N_' + '0')
+    
+    ###############################################
+    
+    # Adding layers to discriminator and generator networks.
+    
+    ########################################################################
+    
+    for t in range(1, len(generator)):
+        
+        #### Printing Chunk Iteration
+        
+        print('\nCurrent Chunk Iteration:', t)
+        print('\nCurrent Chunk Iteration Data Type:', type(t))
+        
+        # Current chunk in the model
+        [Gen_Start, fading_In_Generator] = generator[t]
+        [Disc_Start, fading_In_Discriminator] = discriminator[t]
+        [GAN_Start, fading_In_Full_GAN] = GAN[t]
+        fade = True
+        
+        ###############################################
+        
+        #Commented out the full GAN as it's not built and won't be needed since full discriminator and generator are already being saved.
+        
+        save_Model_Summary('Beginning_Gen_Start_Summary_Layer_%03d.txt' % (t+1), 'Beginning_Gen_Start_Summary_Layer_%03d.png' % (t+1), Gen_Start)
+        save_Model_Summary('Beginning_Disc_Start_Summary_Layer_%03d.txt' % (t+1), 'Beginning_Disc_Start_Summary_Layer_%03d.png' % (t+1), Disc_Start)
+        save_Model_Summary('Beginning_fading_In_Generator_Summary_Layer_%03d.txt' % (t+1), 'Beginning_fading_In_Generator_Summary_Layer_%03d.png' % (t+1), fading_In_Generator)
+        save_Model_Summary('Beginning_fading_In_Discriminator_Summary_Layer_%03d.txt' % (t+1),'Beginning_fading_In_Discriminator_Summary_Layer_%03d.png' % (t+1), fading_In_Discriminator)
+        ###############################################
+        
+        print('\ndiscriminator[t]:',discriminator[t])
+        print('\nfading_In_Discriminator:',fading_In_Discriminator)
+    
+        shape_Disc_fade = fading_In_Discriminator.output_shape
+        print('shape_Disc_fade output shape', shape_Disc_fade[1:])
+        
+        # train fade-in models for next level of growth
+        
+        ################################
+        
+        print('\nchunk_number[t]', type(chunk_number))
+        
+        # Training
+        # Determine the number of batches during training
+        num_of_batch= int(sample_Count /  chunk_number[t])
+        
+        # Number of iterations per training epoch
+        Num_Iterations = num_of_batch * model_fade[t]
+        half_chunk_number = int( chunk_number[t] / 2)
+        
+        print('\nNum_Iterations', Num_Iterations)
+        print('\nhalf_chunk_number', half_chunk_number)
+        
+        shape_Generator = Gen_Start.output_shape
+        new_shape =  shape_Generator[1:]
+    
+        for i2 in range(Num_Iterations):
+            # Fading in of layers
+            if fade:
+                
+                models = [fading_In_Generator, fading_In_Discriminator, fading_In_Full_GAN]
+                # weight values
+                alpha = i2 / float(Num_Iterations - 1)
+                print('\ni2',i2)
+                print('\nweight:',alpha)
+                # update the weight for each model
+                for model in models:
+                    for layer in model.layers:
+                        if isinstance(layer, mergingLayers):
+                            backend.set_value(layer.alpha, alpha)
+                            print('\nbackend.get_value(layer.weight):',backend.get_value(layer.alpha))
+                        
+            ###################################################################
+            
+            ####### Images                
+            randomRealImages = randint(0, totalnumImages-1, half_chunk_number)
+            array_randomRealImages = np.array(randomRealImages)
+            image_set = list()
+            image_size_scaling = []
+            currentImage = []
+            new_images = []
+            
+            for h in range(half_chunk_number):
+                currentImage = load_Image(images_Folder, array_randomRealImages[h], image_size, 'No', sample_Count)
+                new_images = cv2.resize(currentImage, new_shape[0:2], interpolation=cv2.INTER_NEAREST)
+                image_set.append(new_images)
+                
+            image_size_scaling = asarray(image_set)
+             
+            ######################
+
+            ###################################################################
+
+            Real_Images = image_size_scaling
+            Target1 = ones((half_chunk_number, 1))
+            
+            latent_Vector = randn(lat_Vector * half_chunk_number)
+            latent_Vector = latent_Vector.reshape(half_chunk_number, lat_Vector)
+            Fake_Images = fading_In_Generator.predict(latent_Vector)
+            Target2= zeros((half_chunk_number, 1))      
+            
+            train_Batch([fading_In_Discriminator,fading_In_Full_GAN, fading_In_Generator], Fake_Images, Real_Images, Target2, Target1, chunk_number[t], i2, critic_Count, half_chunk_number, images_Folder, image_size, sample_Count, new_shape)
+
+            if i2 % 1000 == 0:
+                save_Plots(fading_In_Generator, plot_Count, 'F_' + str(t), str(i2), Images_Generated_Folder, 'No')
+        
+           ################################
+        
+        # Saving Images
+        save_Plots(fading_In_Generator, plot_Count, 'F_' + str(t), 'None', Images_Generated_Folder, 'No')
+        
+        # Normal model training
+        fade = False
+        
+        ################################
+        
+        # Training
+        # Determine the number of batches during training
+        num_of_batch= int(sample_Count / chunk_number[t])
+        
+        # Number of iterations per training epoch
+        Num_Iterations = num_of_batch * epoches[t]
+        half_chunk_number = int(chunk_number[t] / 2)
+        
+        shape_Generator = Gen_Start.output_shape
+        #shape_Disc = Disc_Start.output_shape
+        new_shape =  shape_Generator[1:]
+        
+        beginning_time = 0
+        diff_Time = 0
+        ending_time = 0
+        
+        for i5 in range(Num_Iterations):
+            # Fading in of layers
+            if fade == True:
+                
+                
+                models = [Gen_Start, Disc_Start, GAN_Start]
+                # weight values
+                alpha = i5 / float(Num_Iterations - 1)
+                # update the weight for each model
+                for model in models:
+                    for layer in model.layers:
+                        if isinstance(layer, mergingLayers):
+                            backend.set_value(layer.alpha, alpha)
+                            print('\nbackend.set_value(layer.weight, weight):', backend.set_value(layer.alpha, alpha))
+                        
+            ###################################################################
+            
+            ####### Images
+            randomRealImages = randint(0, totalnumImages-1, half_chunk_number)
+            array_randomRealImages = np.array(randomRealImages)
+            image_set = list()
+            image_size_scaling = []
+            currentImage = []
+            new_images = []
+            
+            for h in range(half_chunk_number):
+                currentImage = load_Image(images_Folder, array_randomRealImages[h], image_size, 'No', sample_Count)
+                new_images = cv2.resize(currentImage, new_shape[0:2], interpolation=cv2.INTER_NEAREST)
+                image_set.append(new_images)
+                
+            image_size_scaling = asarray(image_set)
+             
+            ######################
+
+            ###################################################################
+            
+            Real_Images = image_size_scaling
+            Target1 = ones((half_chunk_number, 1))
+            
+            latent_Vector = randn(lat_Vector * half_chunk_number)
+            latent_Vector=latent_Vector.reshape(half_chunk_number, lat_Vector)
+            Fake_Images = Gen_Start.predict(latent_Vector)
+            Target2= zeros((half_chunk_number, 1))
+            
+            train_Batch([Disc_Start,GAN_Start, Gen_Start], Fake_Images, Real_Images, Target2, Target1, chunk_number[t], i5, critic_Count, half_chunk_number, images_Folder, image_size, sample_Count, new_shape)
+
+            # Saving latest generated images.
+            if t > len(generator)-5:
+                beginning_time= time.time() - full_Project_Training_Time_Start
+                save_Plots(Gen_Start, 1, 'N_' + str(t), str(i5), NPZ_Images_Generated_Folder, 'Yes')
+                save_Plots(Gen_Start, 1, 'N_' + str(t), str(i5), Single_Images_Generated_Folder, 'No')
+                diff_Time = (time.time() - full_Project_Training_Time_Start) - beginning_time
+                ending_time = ending_time + diff_Time
+            
+            if i5 % 1000 == 0:
+                save_Plots(Gen_Start, plot_Count, 'N_' + str(t), str(i5), Images_Generated_Folder, 'No')
+                Loss_Plots(Real_Image_Loss_Total, Fake_Image_Loss_Total, Generator_Image_Loss_Total, Gen_Start, 'N_' + str(t) + 'Current_Iteration' + str(i5))
+        
+           ################################
+        
+        ###############################################
+        
+        # Saving Images
+        save_Plots(Gen_Start, plot_Count, 'N_' + str(t), 'None', Images_Generated_Folder, 'No')
+        
+        # Saving Loss Plots - the Generator_Image_Loss_Total is the fake image loss
+        Loss_Plots(Real_Image_Loss_Total, Fake_Image_Loss_Total, Generator_Image_Loss_Total, Gen_Start, 'N_' + str(t))
+        # Time taken to grow layers
+        time_To_Complete = time.time() - full_Project_Training_Time_Start - ending_time
+        Time_Total.append(time_To_Complete)
+        Time_Plots(Time_Total, Gen_Start, 'N_' + str(t))
+        
+        ###############################################
+    
+        #Commented out the full GAN as it's not built and won't be needed since full discriminator and generator are already being saved.
+        
+        save_Model_Summary('Ending_Gen_Start_Summary_Layer_%03d.txt' % (t+1), 'Ending_Gen_Start_Summary_Layer_%03d.png' % (t+1), Gen_Start)
+        save_Model_Summary('Ending_Disc_Start_Summary_Layer_%03d.txt' % (t+1),'Ending_Disc_Start_Summary_Layer_%03d.png' % (t+1), Disc_Start)
+        save_Model_Summary('Ending_fading_In_Generator_Summary_Layer_%03d.txt' % (t+1), 'Ending_fading_In_Generator_Summary_Layer_%03d.png' % (t+1),fading_In_Generator)
+        save_Model_Summary('Ending_fading_In_Discriminator_Summary_Layer_%03d.txt' % (t+1), 'Ending_fading_In_Discriminator_Summary_Layer_%03d.png' % (t+1),fading_In_Discriminator)
+
+        ###############################################
+
+##################################################################################################
+
+def save_Plots(model, images_Per_Plot, mode, countFromLoop, folder, npz_Images):
+    # Saving of initial images
+    num_Images_Per_Plot = images_Per_Plot
+    Training_Mode = mode #'Normal_Training_Added_Layers'
+    Gen_Start_Shape = model.output_shape
+    object_Name = '%03d_x_%03d_%s' % (Gen_Start_Shape[1], Gen_Start_Shape[2], Training_Mode)
+    
+    latent_Vector = randn(lat_Vector * num_Images_Per_Plot).reshape(num_Images_Per_Plot, lat_Vector)   
+    Fake_Images_Plot = model.predict(latent_Vector)
+    
+    # Normalizing images
+    Fake_Images_Plot = (Fake_Images_Plot - Fake_Images_Plot.min()) / (Fake_Images_Plot.max() - Fake_Images_Plot.min())
+    
+    # Plotting of Images
+    Rows_And_Cols = int(sqrt(num_Images_Per_Plot))
+    count = 1
+    for i_plot3 in range(num_Images_Per_Plot):
+        pyplot.subplot(Rows_And_Cols, Rows_And_Cols, 1 + i_plot3)
+        pyplot.axis('off')
+        pyplot.imshow(Fake_Images_Plot[i_plot3])
+        count=count+1
+    
+    if npz_Images == 'Yes':
+        np.savez_compressed(folder + 'Image_' + str(Gen_Start_Shape[1]) + 'x' + str(Gen_Start_Shape[1]) + '_' + str(countFromLoop) + '.npz', asarray(Fake_Images_Plot))
+    else:
+        # Saving Plots
+        images_Plot = folder + 'IterationCount_' + countFromLoop + '_' + 'image_Plot_of_Resolution_%s.png' % (object_Name)
+        pyplot.savefig(images_Plot)
+        pyplot.close()
+    
+                 
+    # Saving Gen model for later use
+    
+    if countFromLoop == 'None':
+        current_genenator_file = Generator_Models_Folders + '%s/' % (object_Name)
+        
+        if not os.path.exists(current_genenator_file):
+            os.makedirs(current_genenator_file)
+        
+        model.save(current_genenator_file)
+        print('>Saved the following (Images and Generator Model): %s and %s' % (images_Plot, current_genenator_file))
+    
+##################################################################################################
+        
+def Loss_Plots(Real_Loss, Fake_Loss, GAN_Loss, model, mode):
+    Training_Mode = mode
+    Gen_Start_Shape = model.output_shape
+    object_Name = '%03d_x_%03d-%s' % (Gen_Start_Shape[1], Gen_Start_Shape[2], Training_Mode)
+    print('\nObject Name', object_Name)
+    # Saving the images as full screen
+    manager = plt.get_current_fig_manager()
+    manager.window.showMaximized()
+    # Plotting Loss
+    figure(num=0,figsize=(18,12))
+    pyplot.plot(Real_Loss, label='Real Image Loss Discriminator')
+    pyplot.plot(Fake_Loss, label='Fake Image Loss Discriminator')
+    pyplot.plot(GAN_Loss, label='Image Loss Generator')
+    pyplot.title('Loss of ' + 'Resolution_%s' % (object_Name))
+    pyplot.ylabel('Least Squares loss')
+    pyplot.xlabel('Loss Per Iteration')
+    pyplot.legend()
+    pyplot.savefig(Model_Plot_Folder + 'All_loss_plot_of_Resolution_%s.png' % (object_Name))
+    pyplot.close()
+    
+    figure(num=0,figsize=(18,12))
+    pyplot.plot(Real_Loss, label='Real Image Loss Discriminator', color='blue')
+    pyplot.title('Discriminator Real Image Loss of ' + 'Resolution_%s' % (object_Name))
+    pyplot.ylabel('Least Squares loss')
+    pyplot.xlabel('Loss Per Iteration')
+    pyplot.legend()
+    pyplot.savefig(Model_Plot_Folder + 'Discriminator_Real_loss_plot_of_Resolution_%s.png' % (object_Name))
+    pyplot.close()
+    
+    figure(num=0,figsize=(18,12))
+    pyplot.plot(Fake_Loss, label='Fake Image Loss Discriminator', color='orange')
+    pyplot.title('Discriminator Fake Image Loss of ' + 'Resolution_%s' % (object_Name))
+    pyplot.ylabel('Least Squares loss')
+    pyplot.xlabel('Loss Per Iteration')
+    pyplot.legend()
+    pyplot.savefig(Model_Plot_Folder + 'Discriminator_Fake_loss_plot_of_Resolution_%s.png' % (object_Name))
+    pyplot.close()
+    
+    figure(num=0,figsize=(18,12))
+    pyplot.plot(GAN_Loss, label='Generator Image Loss', color='green')
+    pyplot.title('Generator Image Loss of ' + 'Resolution_%s' % (object_Name))
+    pyplot.ylabel('Least Squares loss')
+    pyplot.xlabel('Loss Per Iteration')
+    pyplot.legend()
+    pyplot.savefig(Model_Plot_Folder + 'Generator_loss_plot_of_Resolution_%s.png' % (object_Name))
+    pyplot.close()
+    
+    
+def Time_Plots(Time, model, mode):
+    Training_Mode = mode #'Normal_Training_Added_Layers'
+    Gen_Start_Shape = model.output_shape
+    object_Name = '%03d_x_%03d-%s' % (Gen_Start_Shape[1], Gen_Start_Shape[2], Training_Mode)
+    print('\nObject Name', object_Name)
+    # Saving the images as full screen
+    manager = plt.get_current_fig_manager()
+    manager.window.showMaximized()
+    # Plotting Loss
+    figure(num=0,figsize=(18,12))
+    pyplot.plot(Time, label='Time of Model (In seconds)')
+    pyplot.title('Time to train model_' + 'Resolution_%s' % (object_Name))
+    pyplot.ylabel('Time (In seconds)')
+    pyplot.xlabel('Image Resolution (starting at 4x4 and doubling everytime)')
+    pyplot.legend()
+    pyplot.savefig(Model_Plot_Folder + 'Time_plot_of_Resolution_%s.png' % (object_Name))
+    pyplot.close()
+ 
+##################################################################################################
+       
+def save_Model_Summary(File_Name, plot_Name, model):
+    
+    model_Summary_txt = Model_Plot_Folder + File_Name
+    model_Summary_Plot = Model_Plot_Folder + plot_Name
+    
+    plot_model(model, to_file=model_Summary_Plot, show_shapes=True, show_layer_names=True)
+    
+    with open(model_Summary_txt, 'w') as model_summary:
+        model.summary(print_fn=lambda x: model_summary.write(x + '\n'))
+        
+##################################################################################################
+
+
+def train_Batch(model, f_Images, r_Images, f_targets, r_targets, c_num, count, critic_Count, half_chunk_number, images_Folder, image_size, sample_Count, new_shape):
+    # Global Loss Lists
+    global Real_Image_Loss_Total   
+    global Fake_Image_Loss_Total
+    global Generator_Image_Loss_Total
+    
+    f_disc = model[0]
+    f_gan = model[1]
+
+    d_Loss_Real_Images = f_disc.train_on_batch(r_Images, r_targets)
+    d_Loss_Fake_Images = f_disc.train_on_batch(f_Images, f_targets)
+        
+    Real_Image_Loss_Total.append(d_Loss_Real_Images)
+    Fake_Image_Loss_Total.append(d_Loss_Fake_Images)
+        
+    g_Input = randn(lat_Vector *  c_num)
+    g_Input=g_Input.reshape( c_num, lat_Vector)
+    r_targets2 = ones(( c_num, 1))
+    g_loss = f_gan.train_on_batch(g_Input, r_targets2)
+    
+    Generator_Image_Loss_Total.append(g_loss)
+    
+    # Batch Loss
+    print('>%d, Discriminator Loss Real Images=%.3f, Discriminator Loss Fake Images=%.3f, Generator Loss=%.3f' % (count+1, d_Loss_Real_Images, d_Loss_Fake_Images, g_loss))
+
+
+##################################################################################################
+
+# Training the generator network through the discriminator network using the Wasserstein loss
+def GAN_Architecture(Dis_Network, Gen_Network):
+    GAN_Networks = list()
+    print('\nlen(Dis_Network)', len(Dis_Network))
+    # Generator Training Via Discriminator
+    for i in range(len(Dis_Network)):
+        gen, dis = Gen_Network[i], Dis_Network[i]
+        # Normal model training 
+        dis[0].trainable = False
+        pre_Chunk = Sequential()
+        pre_Chunk.add(gen[0]) 
+        pre_Chunk.add(dis[0])
+        pre_Chunk.compile(loss='mse', optimizer=Adam(lr=0.0001, beta_1=0, beta_2=0.99, epsilon=10e-8))
+        
+        # Fading in New chunks
+        dis[1].trainable = False
+        new_Chunk = Sequential()
+        new_Chunk.add(gen[1])  
+        new_Chunk.add(dis[1])
+        new_Chunk.compile(loss='mse', optimizer=Adam(lr=0.0001, beta_1=0, beta_2=0.99, epsilon=10e-8))
+        # Appending the models 
+        GAN_Networks.append([pre_Chunk, new_Chunk])
+    return GAN_Networks
+
+# Generator network for GAN
+def Generator_Network(lat_Vector, training_cycles, in_dim=4):
+    # Input to kensor tensor.
+    latent_variable_input = Input(shape=(lat_Vector,))
+    image_shape_width_height = 128
+    
+    #### All the layers are initialized with a normal distribution of standard deviation of 0.2.
+    #### For the weight constraint, initialized with a max norm value of 1.
+    Latent_Vector_Shape1 = image_shape_width_height * in_dim * in_dim
+    # Input layer Latent Vector Chunk
+    chunk1  = Dense(Latent_Vector_Shape1, kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(latent_variable_input)
+    chunk1 = Reshape((in_dim, in_dim, image_shape_width_height))(chunk1)
+    # First convolutional layer following input latent vecotor based on paper.
+    chunk1 = Conv2D(int(image_shape_width_height), (3,3), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunk1)
+    chunk1 = LeakyReLU(alpha=0.2)(chunk1)
+    chunk1 = PixelNormalization()(chunk1)
+    
+    # Second convolutional layer following input latent vecotor based on paper.
+    chunk1 = Conv2D(int(image_shape_width_height), (3,3), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunk1)
+    chunk1 = LeakyReLU(alpha=0.2)(chunk1)
+    chunk1 = PixelNormalization()(chunk1)
+    
+    # Output image generated
+    generated_Image = Conv2D(3, (1,1), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunk1)
+    # Generator Model
+    GAN_Generator = Model(latent_variable_input, generated_Image)
+    # Save Chunks
+    layers_chunks = list()
+    layers_chunks.append([GAN_Generator, GAN_Generator])
+    # Growing of Layers
+    for i in range(1, training_cycles):
+        previous_Chunks = layers_chunks[i - 1][0]
+        ######## get prior model without the fade-on
+        # Previous image ouput.
+        previous_Chunks_Image_Ouput = previous_Chunks.layers[-2].output
+        # Upsampling
+        upsampling = UpSampling2D()(previous_Chunks_Image_Ouput)
+        chunkn = []
+        chunkn = Conv2D(int(image_shape_width_height), (3,3), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(upsampling)
+        chunkn = LeakyReLU(alpha=0.2)(chunkn)
+        chunkn = PixelNormalization()(chunkn)
+        
+        chunkn = Conv2D(int(image_shape_width_height), (3,3), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunkn)
+        chunkn = LeakyReLU(alpha=0.2)(chunkn)
+        chunkn = PixelNormalization()(chunkn)        
+        
+        # new output layer
+        generated_Image = Conv2D(3, (1,1), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunkn)
+        
+        # To grow the GANs a normal model is defined first before a transition phase can be done.
+        # New Chunk Layer
+        
+        newChunk = Model(previous_Chunks.input, generated_Image)
+        # Previous image layer.
+        previous_Layer = previous_Chunks.layers[-1]        
+        # Combining upsampled layer to the old layer output.       
+        
+        # Viewing chunks through runs.
+        print('\ni:',i)
+        print('\nprevious_Chunks.input:',previous_Chunks.input)
+        print('\nprevious_Layer:',previous_Layer)
+        print('\nsampling:',upsampling)
+        
+        prev_Generated_Image = previous_Layer(upsampling)
+
+        # Combining old and new layers
+        combining_Layers = mergingLayers()([prev_Generated_Image, generated_Image])
+        
+        # New model is defined based on the merged layers.
+        newChunk2 = Model(previous_Chunks.input, combining_Layers)
+        
+        # Appending the models
+        layers_chunks.append([newChunk, newChunk2])
+    return layers_chunks
+
+# Discriminator network for GAN
+def Discriminator_Network(training_cycles, input_shape=(4,4,3)):
+    # Input to kensor tensor.
+    image_input = Input(shape=input_shape)
+    image_shape_width_height = 128
+    
+    #### Like the generator, all the layers are initialized with a normal distribution of standard deviation of 0.2.
+    #### For the weight constraint, initialized with a max norm value of 1.
+    
+    # First convolutional layer (1x1) following input image based on paper.
+    chunk1 = Conv2D(int(image_shape_width_height), (1,1), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(image_input)
+    chunk1 = LeakyReLU(alpha=0.2)(chunk1)
+    # Second convolutional layer (3x3) following 1x1 convolutional layer.
+    chunk1 = Minibatch_STDDev()(chunk1)
+    chunk1 = Conv2D(int(image_shape_width_height), (3,3), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunk1)
+    chunk1 = LeakyReLU(alpha=0.2)(chunk1)
+    # Third convolutional layer (4x4) following 3x3 convolutional layer.
+    chunk1 = Conv2D(int(image_shape_width_height), (4,4), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunk1)
+    chunk1 = LeakyReLU(alpha=0.2)(chunk1)
+    # Output Fully-Connected Layer
+    chunk1 = Flatten()(chunk1)
+    # The default activation of a layer is linear so we don't need to specify it here.
+    out_class = Dense(1)(chunk1)
+    # Grouping the layers into an object for training.
+    GAN_Discriminator = Model(image_input, out_class)
+    # Configuring the model with losses and metrics (based on paper).
+    GAN_Discriminator.compile(loss='mse', optimizer=Adam(lr=0.0001, beta_1=0, beta_2=0.99, epsilon=10e-8))
+    # Save Chunks
+    layers_chunks = list()
+    layers_chunks.append([GAN_Discriminator, GAN_Discriminator])
+    # Growing of Layers
+    for i in range(1, training_cycles):
+        previous_Chunks = layers_chunks[i - 1][0]
+        ######## get prior model without the fade-on
+        # Previous image shape.
+        previous_Chunks_Image_Shape = list(previous_Chunks.input.shape)
+        print('\nPrevious Chunks Image Shape:', previous_Chunks_Image_Shape[-2])
+        new_Chunk_Image_Width_And_Height = (previous_Chunks_Image_Shape[-2])*2
+        new_Chunk_Image_Channels = previous_Chunks_Image_Shape[-1]
+        
+        print('\nnew_Chunk_Image_Width_And_Height:', new_Chunk_Image_Width_And_Height)
+        print('\nnew_Chunk_Image_Channels:', new_Chunk_Image_Channels)
+        
+        # New Image Shape = double the size of the previous shape
+        new_shape = (new_Chunk_Image_Width_And_Height, new_Chunk_Image_Width_And_Height, new_Chunk_Image_Channels)
+        Input_Image_Representation_Shape = Input(shape=new_shape)
+        chunkn = []
+        # First convolutional layer (1x1)following input image based on paper.
+        chunkn = Conv2D(int(image_shape_width_height), (1,1), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(Input_Image_Representation_Shape)
+        chunkn = LeakyReLU(alpha=0.2)(chunkn)
+        # Second  and  third convolutional layers (3x3) following 1x1 convolutional layer.
+        chunkn = Conv2D(int(image_shape_width_height), (3,3), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunkn)
+        chunkn = LeakyReLU(alpha=0.2)(chunkn)
+        chunkn = Conv2D(int(image_shape_width_height), (3,3), padding='same', kernel_initializer=RandomNormal(stddev=0.02), kernel_constraint=MaxNorm(1.0))(chunkn)
+        chunkn = LeakyReLU(alpha=0.2)(chunkn)
+        #Downsampling
+        chunkn = AveragePooling2D()(chunkn)
+        new_Model_Chunkn = chunkn
+        # Don't need the input and 1x1 convolutional layer for chunks after the first one
+        end = len(previous_Chunks.layers)
+        for id2 in range(3, end):
+            chunkn = previous_Chunks.layers[id2](chunkn)
+        # To grow the GANs a normal model is defined first before a transition phase can be done.
+        # New Chunk Layer
+        newChunk = Model(Input_Image_Representation_Shape, chunkn)
+        # Configuring the model with losses and metrics (based on paper).
+        newChunk.compile(loss='mse', optimizer=Adam(lr=0.0001, beta_1=0, beta_2=0.99, epsilon=10e-8))
+        # Downsampling
+        downsample = AveragePooling2D()(Input_Image_Representation_Shape)
+        # connect the previous chunk to a downsampled layer as described in paper.
+        old_Model_Chunkn = previous_Chunks.layers[1](downsample)
+        old_Model_Chunkn = previous_Chunks.layers[2](old_Model_Chunkn)
+        # The fading of chunks together.
+        chunkn = mergingLayers()([old_Model_Chunkn, new_Model_Chunkn])
+        
+        # Again after merging, we don't need the input and 1x1 convolutional layer for chunks after the first one
+        end = len(previous_Chunks.layers)
+        for id3 in range(3, end):
+            chunkn = previous_Chunks.layers[id3](chunkn)
+            
+        # New model is defined based on the merged layers.
+        newChunk_And_PreviousChunk = Model(Input_Image_Representation_Shape, chunkn)
+        # Configuring the model with losses and metrics (based on paper).
+        newChunk_And_PreviousChunk.compile(loss='mse', optimizer=Adam(lr=0.0001, beta_1=0, beta_2=0.99, epsilon=10e-8))
+        
+        
+        # Appending the models
+        layers_chunks.append([newChunk, newChunk_And_PreviousChunk])
+    return layers_chunks
+
+
+def save_Images(sourceFolderName, saved_Images_FolderName, Image_Number, size_of_Image):
+        # Using a multi-task cascaded convolutional neural network to determine if the image being looked at 
+        # has a face that can be used for training the GAN model.
+        
+        model = MTCNN()
+        array_Image = []
+        
+        # =============================================================================
+        for numImage, filename in enumerate(os.listdir(sourceFolderName),start=0):    
+           if numImage == Image_Number:
+             break
+           else:
+               
+             ##################################################
+             fileImage = Image.open(os.path.join(sourceFolderName,filename))
+             # convert to RGB, if needed.
+             fileImage = fileImage.convert('RGB')
+             array_Image = asarray(fileImage)
+      
+             # detect face in the image.
+             faces = model.detect_faces(array_Image)
+             # skip cases where we could not detect a face.
+             faceCount = 0
+             if len(faces) == 0:
+               faceCount = 1
+               
+             if faceCount == 0:
+               # Face Details
+               x_Coordinate_1 , y_Coordinate_1 , imageWidth, imageHeight = faces[0]['box']
+               # Ensuring pixels values are positive.
+               x_Coordinate_1, y_Coordinate_1 = abs(x_Coordinate_1), abs(y_Coordinate_1)
+               # Determining the coordinates of the face.         
+               x_Coordinate_2 , y_Coordinate_2 = x_Coordinate_1 + imageWidth, y_Coordinate_1 + imageHeight
+               # Grabbing the overall pixel location of the faces.
+               face_pixels = array_Image[y_Coordinate_1:y_Coordinate_2, x_Coordinate_1:x_Coordinate_2]
+               # changing the pixels to the model size.
+               newImage = Image.fromarray(face_pixels)
+               newImage = newImage.resize(size_of_Image)
+               image_face_array = asarray(newImage)
+               
+               if image_face_array is not None:
+                 np.savez_compressed(saved_Images_FolderName + 'Image_' + str(size_of_Image[0]) + 'x' + str(size_of_Image[0]) + '_' + str(numImage) + '.npz', image_face_array)
+                 #celebaImages.append(image_face_array)
+                 # Check the shape of the image array ever 100 images to make sure all is good. 
+                 if numImage % 1000 == 0:
+                     print(len(celebaImages), (np.array(celebaImages)).shape)
+                 
+def load_Image(folderName, loopCount, size_of_Image, show_MTCNN_Images, sample_Count):
+    # Loading back in the data.
+    
+    if os.path.isfile(folderName + 'Image_' + str(size_of_Image[0]) + 'x' + str(size_of_Image[0]) + '_' + str(loopCount) + '.npz') == True:
+        celeba_Images_Saved = load(folderName + 'Image_' + str(size_of_Image[0]) + 'x' + str(size_of_Image[0]) + '_' + str(loopCount) + '.npz')
+    elif os.path.isfile(folderName + 'Image_' + str(size_of_Image[0]) + 'x' + str(size_of_Image[0]) + '_' + str(loopCount) + '.npz') == False:
+        while True:    
+            randValue = randint(0, sample_Count-1)
+            if os.path.isfile(folderName + 'Image_' + str(size_of_Image[0]) + 'x' + str(size_of_Image[0]) + '_' + str(randValue) + '.npz') == True:
+                celeba_Images_Saved = load(folderName + 'Image_' + str(size_of_Image[0]) + 'x' + str(size_of_Image[0]) + '_' + str(randValue) + '.npz')
+                break
+        
+    faces_In_Dataset = celeba_Images_Saved['arr_0']
+    # To floats.
+    faces_In_Dataset_Float = faces_In_Dataset.astype('float32')
+    # To range of -1 to 1, most GAN models make use of this range as it thought to better cover the colour spectrum.
+    faces_In_Dataset_Float = (faces_In_Dataset_Float - 127.5)/127.5
+    #print('Number of faces loaded, followed by resolution shape and the number of channels:', faces_In_Dataset.shape)
+    
+    if show_MTCNN_Images == 'Yes':
+        #Plotting of loaded images.
+        #A total of 16 images will be looked at.
+        width = 4
+        height = 4
+        
+        imageNum = 16
+        
+        data = []
+        
+        for a in range(imageNum):
+            celeba_Images_Saved = load(folderName + 'Image_' + str(size_of_Image[0]) + 'x' + str(size_of_Image[0]) + '_' + str(a+1) + '.npz')
+            faces_In_Dataset = celeba_Images_Saved['arr_0']
+            # To floats.
+            faces_In_Dataset_Float = faces_In_Dataset.astype('float32')
+            # To range of -1 to 1, most GAN models make use of this range as it thought to better cover the colour spectrum.
+            faces_In_Dataset_Float = (faces_In_Dataset_Float - 127.5)/127.5
+            data.append(faces_In_Dataset_Float)
+            print('faces_In_Dataset_Float.shape',faces_In_Dataset_Float.shape)
+        
+        data =  np.array(data)
+        print('data.shape', np.array(data).shape)
+        fig, axs = pyplot.subplots(width, height, figsize=(12,8))
+        cnt = 0
+        for i in range(width):
+            for j in range(height):
+                axs[i, j].imshow(data[cnt, :, :, :])
+                axs[i, j].axis('off')
+                cnt += 1   
+        
+    
+    return faces_In_Dataset_Float     
+
+
+####################################################    
+
+## The merging layers class responsible for the mergeing of layers as the GAN network grows.
+# The below class was based on the work from https://machinelearningmastery.com/
+class mergingLayers(Add):
+    # Initializing
+    def __init__(self, alpha=0.0, **kwargs):
+        super(mergingLayers,self).__init__(**kwargs)
+        # Initializing weight variable.
+        self.alpha = backend.variable(alpha, name='ws_alpha')
+
+    def _merge_function(self, inputs):
+        # Merging of Two Layers only as done so in the paper.
+        assert (len(inputs) == 2)
+        output = ((1.0 - self.alpha) * inputs[0]) + (self.alpha * inputs[1])
+        return output
+
+# The below class was based on the work from https://machinelearningmastery.com/
+class PixelNormalization(Layer):
+    # Initializing
+    def __init__(self, **kwargs):
+        super(PixelNormalization, self).__init__(**kwargs)
+
+    def call(self, inputs):
+        pixel_square = inputs**2.0
+        pixel_mean = backend.mean(pixel_square, axis=-1, keepdims=True) + 0.00000001 
+        L2_Norm = backend.sqrt(pixel_mean)
+        pixelNormalizedValues = inputs / L2_Norm
+        return pixelNormalizedValues
+    
+    def compute_output_shape(self, input_shape):
+        return input_shape        
+
+# The below class was based on the work from https://machinelearningmastery.com/
+class Minibatch_STDDev(Layer):
+    # Initializing
+    def __init__(self, **kwargs):
+        super(Minibatch_STDDev, self).__init__(**kwargs)
+
+    def call(self, inputs):
+        # Calculating variance within the layer.
+        pixel_average = backend.mean(inputs, axis=0, keepdims=True)
+        eleWiseSquareDifference = backend.square(inputs - pixel_average)
+        eleWiseSquareDifference_Average= backend.mean(eleWiseSquareDifference, axis=0, keepdims=True) + 0.00000001
+        
+        # Using the variance to determine the standard deviation.
+        standardDeviation = backend.sqrt(eleWiseSquareDifference_Average)
+        averageStandardDeviation = backend.mean(standardDeviation, keepdims=True)
+        
+        # Scaling the average standard deviation to the shape of the image representation, and the concatenating that to the image representation.
+        imageRepresentation_Shape = backend.shape(inputs)
+        outputLayer = backend.tile(averageStandardDeviation, (imageRepresentation_Shape[0], imageRepresentation_Shape[1], imageRepresentation_Shape[2], 1))
+        imageRepresentation_and_outputLayer = backend.concatenate([inputs, outputLayer], axis=-1)
+        return imageRepresentation_and_outputLayer
+
+    def compute_output_shape (self, input_shape):
+        input_shape = list(input_shape)
+        input_shape[-1] += 1
+        return tuple(input_shape)
+    
+    
+
+#### FID Calculations
+
+# Images being returned
+def load_Single_Images(folderName, num_of_Images):
+    
+    FID_Image_Count = num_of_Images
+            
+    randomRealImages = randint(0, totalnumImages-1, FID_Image_Count)
+    array_randomRealImages = np.array(randomRealImages)
+    image_set = list()
+    currentImage = []
+    new_images = []
+    shape = (image_size[0],image_size[1],3)
+    
+    for h in range(FID_Image_Count):
+        currentImage = load_Image(folderName, array_randomRealImages[h], image_size, 'No', 30000)
+        # If shape is like (1,128,128,3) then change to (128,128,3)
+        if (currentImage.shape)[0] == 1:
+            currentImage = np.squeeze(currentImage)
+        new_images = cv2.resize(currentImage, shape[0:2], interpolation=cv2.INTER_NEAREST)
+        image_set.append(new_images)
+        
+    return asarray(image_set)
+
+def load_Single_Images_Created(folderName, num_of_Images):
+    
+    FID_Image_Count = num_of_Images
+            
+    randomRealImages = randint(0, totalnumImages-1, FID_Image_Count)
+    array_randomRealImages = np.array(randomRealImages)
+    image_set = list()
+    currentImage = []
+    new_images = []
+    shape = (image_size[0],image_size[1],3)
+    
+    for h in range(FID_Image_Count):
+        
+        if os.path.isfile(folderName + 'Image_' + str(image_size[0]) + 'x' + str(image_size[0]) + '_' + str(array_randomRealImages[h]) + '.npz') == True:
+            celeba_Images_Saved = load(folderName + 'Image_' + str(image_size[0]) + 'x' + str(image_size[0]) + '_' + str(array_randomRealImages[h]) + '.npz')
+        elif os.path.isfile(folderName + 'Image_' + str(image_size[0]) + 'x' + str(image_size[0]) + '_' + str(array_randomRealImages[h]) + '.npz') == False:
+            while True:    
+                randValue = randint(0, totalnumImages-1)
+                if os.path.isfile(folderName + 'Image_' + str(image_size[0]) + 'x' + str(image_size[0]) + '_' + str(randValue) + '.npz') == True:
+                    celeba_Images_Saved = load(folderName + 'Image_' + str(image_size[0]) + 'x' + str(image_size[0]) + '_' + str(randValue) + '.npz')
+                    break
+        
+        faces_In_Dataset = celeba_Images_Saved['arr_0']
+        # To floats.
+        faces_In_Dataset_Float = faces_In_Dataset.astype('float32')
+        # To range of -1 to 1, most GAN models make use of this range as it thought to better cover the colour spectrum.
+        faces_In_Dataset_Float = (faces_In_Dataset_Float - 127.5)/127.5
+        
+        currentImage = faces_In_Dataset_Float
+    
+        # If shape is like (1,128,128,3) then change to (128,128,3)
+        if (currentImage.shape)[0] == 1:
+            currentImage = np.squeeze(currentImage)
+        new_images = cv2.resize(currentImage, shape[0:2], interpolation=cv2.INTER_NEAREST)
+        image_set.append(new_images)
+        
+    return asarray(image_set)
+
+# scale an array of images to a new size
+def scale_images(images, new_shape):
+	images_list = list()
+	for image in images:
+		# resize with nearest neighbor interpolation
+		new_image = resize(image, new_shape, 0)
+		# store
+		images_list.append(new_image)
+	return asarray(images_list)
+ 
+# The below function was based on the work from https://machinelearningmastery.com/    
+# calculate frechet inception distance
+def calculate_fid(model, images1, images2):
+	# calculate activations
+	act1 = model.predict(images1)
+	act2 = model.predict(images2)
+	# calculate mean and covariance statistics
+	mu1, sigma1 = act1.mean(axis=0), cov(act1, rowvar=False)
+	mu2, sigma2 = act2.mean(axis=0), cov(act2, rowvar=False)
+	# calculate sum squared difference between means
+	ssdiff = numpy.sum((mu1 - mu2)**2.0)
+	# calculate sqrt of product between cov
+	covmean = sqrtm(sigma1.dot(sigma2))
+	# check and correct imaginary numbers from sqrt
+	if iscomplexobj(covmean):
+		covmean = covmean.real
+	# calculate score
+	fid = ssdiff + trace(sigma1 + sigma2 - 2.0 * covmean)
+	return fid
+
+# The below function was based on the work from https://machinelearningmastery.com/    
+### Inception Score
+# assumes images have any shape and pixels in [0,255]
+def calculate_inception_score(images, n_split=10, eps=1E-16):
+	# load inception v3 model
+	model_IS = InceptionV3()
+	# enumerate splits of images/predictions
+	scores = list()
+	n_part = floor(images.shape[0] / n_split)
+	for i in range(n_split):
+		# retrieve images
+		ix_start, ix_end = i * n_part, (i+1) * n_part
+		subset = images[ix_start:ix_end]
+		# convert from uint8 to float32
+		subset = subset.astype('float32')
+		# scale images to the required size
+		subset = scale_images(subset, (299,299,3))
+		# pre-process images, scale to [-1,1]
+		subset = preprocess_input(subset)
+		# predict p(y|x)
+		p_yx = model_IS.predict(subset)
+		# calculate p(y)
+		p_y = expand_dims(p_yx.mean(axis=0), 0)
+		# calculate KL divergence using log probabilities
+		kl_d = p_yx * (log(p_yx + eps) - log(p_y + eps))
+		# sum over classes
+		sum_kl_d = kl_d.sum(axis=1)
+		# average over images
+		avg_kl_d = mean(sum_kl_d)
+		# undo the log
+		is_score = exp(avg_kl_d)
+		# store
+		scores.append(is_score)
+	# average across images
+	is_avg, is_std = mean(scores), std(scores)
+	return is_avg, is_std 
+###
+    
+if __name__ == '__main__':
+  
+    #####################################################################################
+    
+    ### Firstly setting the memory growth to true so that GPU memory is used only as needed.
+    
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+            print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+        except RuntimeError as e:
+            print(e)
+   
+    
+    ######
+    
+    # Folder Locations
+    # Location for celeba data:
+    Celebafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/img_celeba'
+    MTCNN_Folder_and_File = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/img_Celeba_MTCNN/128x128_celeba.npz'
+    MTCNN_Folder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/img_Celeba_MTCNN/'
+    Images_Generated_Folder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/images_Generated/'
+    Single_Images_Generated_Folder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/images_Generated_Ind/'
+    NPZ_Images_Generated_Folder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/images_Generated_npz/'
+    Generator_Models_Folders = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/Gen_Models/'
+    Model_Plot_Folder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/Model_Plot/'
+    
+    
+    # Full project training time.
+    full_Project_Training_Time_Start = time.time()
+    
+    ############################################################
+    
+    # Script Controls
+    
+    # 1. Save a new set of images or not.
+    saveImages='No'
+    
+    # 2. Check if you want to load and display the saved data. (No longer needed) 
+    #Load_And_Display_Data ='No'
+    
+    # 3. Train PGAN model.
+    Train_PGAN_Model = 'Yes'
+    
+    #4. Decide on metrics too use.
+    FID = 'Yes'
+    Inception_Score = 'Yes'
+    
+    #5 
+    # The number indicates the number of times which the images generated will double.
+    # For example, 3 indicates the following 4x4 -> 8x8 -> 16x16, 6 = 128x128, 7 = 256x256, 8 = 512x512, 9 = 1024x1024
+    growth_Phases = 6
+    totalnumImages = 100000
+    
+    ############################################################
+    
+    print('Current Version of TensorFlow Being Used:')
+    print(tf.__version__)
+    # Testing if the GPU is being Used
+    print(tf.test.is_gpu_available())
+    print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
+     
+    # Run to test Tensorflow, this was found to help initialize cuDNN.
+    
+    with tf.device('/gpu:0'):
+        mat_a = tf.constant([2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0], shape=[3, 4], name='mat_a')
+        mat_b = tf.constant([2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0], shape=[4, 3], name='mat_b')
+        mat_c = tf.matmul(mat_a, mat_b)
+
+    with tf.compat.v1.Session() as sess:
+        print ("\nSimple test for Tensorflow:\n", mat_c,"\n")        
+    
+    sess.close()
+      
+    # Celeba Dataset Preparation
+    # Total time to prepare Celeba Dataset.
+    start_Time = time.time()    
+    
+    #####################################################################################
+    # Celeba Dataset Location on Local Machine.
+    
+    celebaImages=[]
+    # Training Sample Count.
+    numSamples = 50000
+    # Image sizes that will be used for training GAN. The size here will be (128, 128). 
+    image_size=(128, 128)
+    
+    if saveImages == 'Yes':
+        
+        save_Images(Celebafolder, MTCNN_Folder, numSamples, image_size)
+        
+        #=============================================================================
+    # Ending
+    end_Time = time.time() - start_Time    
+    print('Completed time to process dataset (in seconds):', "%.2f" % round(end_Time, 2))   
+    print('\nData processing stage complete. \n')
+
+    #### Configuration of Models
+    
+    if Train_PGAN_Model == 'Yes':
+        
+        # Loss Lists, going to save losses to be view later
+        Real_Image_Loss_Total = list()      
+        Fake_Image_Loss_Total = list()
+        Generator_Image_Loss_Total = list()
+        Time_Total = list()
+        
+        # Testing equalized learning rate
+        c_Value = list()
+        before = list()
+        after = list()
+          
+        # Folder to use depending on growth_phase
+        if growth_Phases == 6:
+            #datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data128x128/data128x128/'
+            datafolder = MTCNN_Folder
+            training_Batchs = [16, 16, 16, 8, 4, 4]
+            training_epochs = [5, 8, 8, 10, 10, 10]
+        elif growth_Phases == 7:
+            datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data256x256/data256x256/'
+            training_Batchs = [16, 16, 16, 8, 4, 4, 2]
+            training_epochs = [5, 8, 8, 10, 10, 10, 10]
+        elif growth_Phases == 8:
+            datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data512x512/data512x512/'
+            training_Batchs = [16, 16, 16, 8, 4, 4, 2, 2]
+            training_epochs = [5, 8, 8, 10, 10, 10, 10, 10]
+        elif growth_Phases == 9:
+            datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data1024x1024/data1024x1024/'
+            training_Batchs = [16, 16, 16, 8, 4, 4, 2, 2, 2]
+            training_epochs = [5, 8, 8, 10, 10, 10, 10, 10, 10]
+        
+        # Latent vector input for generator. 
+        lat_Vector = 100
+        # Discriminator, generator, and GAN model
+        discriminator_Start = Discriminator_Network(growth_Phases)
+        generator_Start = Generator_Network(lat_Vector, growth_Phases)
+        GAN_Start = GAN_Architecture(discriminator_Start, generator_Start)       
+
+        # Images and dataset shape
+        faces_In_Dataset_Float = []
+        images_Start = faces_In_Dataset_Float
+
+        # Training the GAN model.
+        train(generator_Start, discriminator_Start, GAN_Start, images_Start, lat_Vector, training_epochs, training_epochs, training_Batchs, image_size, numSamples, datafolder)
+        
+    # Overall time spent to complete training model.
+    full_Project_Training_Time_End = time.time() - full_Project_Training_Time_Start    
+    print('Time taken to complete training of GAN model:', "%.2f" % round(full_Project_Training_Time_End, 2)) 
+    
+    ########### Calculate Metrics ###########
+    
+    # Calculate FID
+    
+    if FID == 'Yes':
+        # prepare the inception v3 model
+        model_FID = InceptionV3(include_top=False, pooling='avg', input_shape=(299,299,3))
+        
+        if growth_Phases == 6:
+            datafolder = MTCNN_Folder
+            #datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data128x128/data128x128/'
+        elif growth_Phases == 7:
+            datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data256x256/data256x256/'
+        elif growth_Phases == 8:
+            datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data512x512/data512x512/'
+        elif growth_Phases == 9:
+            datafolder = 'D:/Deep Learning/Final Project Datasets/Empirical Validation of DCGAN Capabilities/Celeba_Cropped_Align/celeba_res_data/data1024x1024/data1024x1024/'
+        
+        num_of_Images = 5000
+        
+        images1=list()
+        images2=list()
+        
+        images1 = load_Single_Images(datafolder,num_of_Images)
+        images2 = load_Single_Images_Created(NPZ_Images_Generated_Folder,num_of_Images)
+        
+        shuffle(images1)
+        shuffle(images2)
+        
+        print('Prepared', images1.shape, images2.shape)
+        # convert integer to floating point values
+        images1 = images1.astype('float32')
+        images2 = images2.astype('float32')
+        # resize images
+        images1 = scale_images(images1, (299,299,3))
+        images2 = scale_images(images2, (299,299,3))
+        print('Scaled', images1.shape, images2.shape)
+        # pre-process images
+        images1 = preprocess_input(images1)
+        images2 = preprocess_input(images2)
+        # fid between images1 and images1
+        fid = calculate_fid(model_FID, images1, images1)
+        print('FID (same): %.3f' % fid)
+        # fid between images1 and images2
+        fid = calculate_fid(model_FID, images1, images2)
+        print('FID (different): %.3f' % fid)
+        
+    ########################################
+    
+    # Calculate Inception Score
+    
+    if Inception_Score == 'Yes':
+        num_of_Images = 5000
+        images_Incep = load_Single_Images_Created(NPZ_Images_Generated_Folder,num_of_Images)
+        shuffle(images_Incep)
+        print('\nloaded: ', images_Incep.shape)
+        # calculate inception score
+        is_avg, is_std = calculate_inception_score(images_Incep)
+        print('\nInception Score: ', is_avg, is_std)
+    
+    #####################################################
+    
+    
+     
+    
