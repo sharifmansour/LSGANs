@@ -834,7 +834,6 @@ def load_Image(folderName, loopCount, size_of_Image, show_MTCNN_Images, sample_C
 ####################################################    
 
 ## The merging layers class responsible for the mergeing of layers as the GAN network grows.
-# The below class was based on the work from https://machinelearningmastery.com/
 class mergingLayers(Add):
     # Initializing
     def __init__(self, alpha=0.0, **kwargs):
@@ -848,7 +847,7 @@ class mergingLayers(Add):
         output = ((1.0 - self.alpha) * inputs[0]) + (self.alpha * inputs[1])
         return output
 
-# The below class was based on the work from https://machinelearningmastery.com/
+# Layer Normalization Layer
 class PixelNormalization(Layer):
     # Initializing
     def __init__(self, **kwargs):
@@ -864,7 +863,7 @@ class PixelNormalization(Layer):
     def compute_output_shape(self, input_shape):
         return input_shape        
 
-# The below class was based on the work from https://machinelearningmastery.com/
+# Mini-batch Standard Deviation Layer
 class Minibatch_STDDev(Layer):
     # Initializing
     def __init__(self, **kwargs):
@@ -892,7 +891,6 @@ class Minibatch_STDDev(Layer):
         return tuple(input_shape)
     
     
-
 #### FID Calculations
 
 # Images being returned
@@ -955,72 +953,64 @@ def load_Single_Images_Created(folderName, num_of_Images):
         
     return asarray(image_set)
 
-# scale an array of images to a new size
-def scale_images(images, new_shape):
-	images_list = list()
-	for image in images:
-		# resize with nearest neighbor interpolation
-		new_image = resize(image, new_shape, 0)
-		# store
-		images_list.append(new_image)
-	return asarray(images_list)
- 
-# The below function was based on the work from https://machinelearningmastery.com/    
+# Resizing Images
+def scale_images(images_to_Scale, new_shape_Images):
+	i_list = list()
+	for x in images_to_Scale:
+		# resizing with nearest neighbor interpolation
+		new_image = resize(x, new_shape_Images, 0)
+		i_list.append(new_image)
+	return asarray(i_list)
+    
 # calculate frechet inception distance
-def calculate_fid(model, images1, images2):
-	# calculate activations
-	act1 = model.predict(images1)
-	act2 = model.predict(images2)
-	# calculate mean and covariance statistics
-	mu1, sigma1 = act1.mean(axis=0), cov(act1, rowvar=False)
-	mu2, sigma2 = act2.mean(axis=0), cov(act2, rowvar=False)
-	# calculate sum squared difference between means
-	ssdiff = numpy.sum((mu1 - mu2)**2.0)
-	# calculate sqrt of product between cov
-	covmean = sqrtm(sigma1.dot(sigma2))
-	# check and correct imaginary numbers from sqrt
-	if iscomplexobj(covmean):
-		covmean = covmean.real
-	# calculate score
-	fid = ssdiff + trace(sigma1 + sigma2 - 2.0 * covmean)
-	return fid
+def fid_Value(model, images1, images2):
+	# functions
+	func1 = model.predict(images1)
+	func2 = model.predict(images2)
+	#  covariance and mean
+	mean1, co1 = func1.mean(axis=0), cov(func1, rowvar=False)
+	mean2, co2 = func2.mean(axis=0), cov(func2, rowvar=False)
+	# mean difference
+	mean_Diff = numpy.sum((mean1 - mean2)**2.0)
+	# sqrt of product between the covariances
+	sqr_Pro = sqrtm(co1.dot(co2))
+	# check if complex numbers if so make real
+	if iscomplexobj(sqr_Pro):
+		sqr_Pro = sqr_Pro.real
+	# FID Value
+	FID_Value = mean_Diff + trace(co1 + co2 - 2.0 * sqr_Pro)
+	return FID_Value
 
-# The below function was based on the work from https://machinelearningmastery.com/    
 ### Inception Score
 # assumes images have any shape and pixels in [0,255]
-def calculate_inception_score(images, n_split=10, eps=1E-16):
-	# load inception v3 model
-	model_IS = InceptionV3()
-	# enumerate splits of images/predictions
-	scores = list()
-	n_part = floor(images.shape[0] / n_split)
-	for i in range(n_split):
-		# retrieve images
-		ix_start, ix_end = i * n_part, (i+1) * n_part
-		subset = images[ix_start:ix_end]
-		# convert from uint8 to float32
-		subset = subset.astype('float32')
-		# scale images to the required size
-		subset = scale_images(subset, (299,299,3))
-		# pre-process images, scale to [-1,1]
-		subset = preprocess_input(subset)
-		# predict p(y|x)
-		p_yx = model_IS.predict(subset)
-		# calculate p(y)
-		p_y = expand_dims(p_yx.mean(axis=0), 0)
-		# calculate KL divergence using log probabilities
-		kl_d = p_yx * (log(p_yx + eps) - log(p_y + eps))
-		# sum over classes
-		sum_kl_d = kl_d.sum(axis=1)
-		# average over images
-		avg_kl_d = mean(sum_kl_d)
-		# undo the log
-		is_score = exp(avg_kl_d)
-		# store
-		scores.append(is_score)
-	# average across images
-	is_avg, is_std = mean(scores), std(scores)
-	return is_avg, is_std 
+def inception_score_value(images, num=10, epsilon=1E-16):
+	# Inception model
+	model = InceptionV3()
+	values = list()
+	n_part = floor(images.shape[0] / num)
+	for x in range(num):
+		# Images
+		start, end = x * n_part, (x+1) * n_part
+		img_sub = images[start:end]
+		# Convert to Float 32
+		img_sub = img_sub.astype('float32')
+		# Scaling
+		img_sub = scale_images(img_sub, (299,299,3))
+		# Pre-process
+		img_sub = preprocess_input(img_sub)
+		# predict
+		xy_value = model.predict(img_sub)
+		y_value = expand_dims(xy_value.mean(axis=0), 0)
+		# KL divergence
+		KLDivergence = xy_value * (log(xy_value + epsilon) - log(y_value + epsilon))
+		sum_KLDivergence = KLDivergence.sum(axis=1)
+		avg_KLDivergence = mean(sum_KLDivergence)
+		inception_score = exp(avg_KLDivergence)
+		# Appending values
+		values.append(inception_score)
+	# Average scores
+	inception_score_average, inception_score_STD = mean(values), std(values)
+	return inception_score_average, inception_score_STD 
 ###
     
 if __name__ == '__main__':
@@ -1195,32 +1185,31 @@ if __name__ == '__main__':
         
         num_of_Images = 5000
         
-        images1=list()
-        images2=list()
+        imag1_list=list()
+        imag2_list=list()
         
-        images1 = load_Single_Images(datafolder,num_of_Images)
-        images2 = load_Single_Images_Created(NPZ_Images_Generated_Folder,num_of_Images)
+        imag1_list = load_Single_Images(datafolder,num_of_Images)
+        imag2_list = load_Single_Images_Created(NPZ_Images_Generated_Folder,num_of_Images)
         
-        shuffle(images1)
-        shuffle(images2)
+        shuffle(imag1_list)
+        shuffle(imag2_list)
         
-        print('Prepared', images1.shape, images2.shape)
-        # convert integer to floating point values
-        images1 = images1.astype('float32')
-        images2 = images2.astype('float32')
-        # resize images
-        images1 = scale_images(images1, (299,299,3))
-        images2 = scale_images(images2, (299,299,3))
-        print('Scaled', images1.shape, images2.shape)
-        # pre-process images
-        images1 = preprocess_input(images1)
-        images2 = preprocess_input(images2)
-        # fid between images1 and images1
-        fid = calculate_fid(model_FID, images1, images1)
-        print('FID (same): %.3f' % fid)
-        # fid between images1 and images2
-        fid = calculate_fid(model_FID, images1, images2)
-        print('FID (different): %.3f' % fid)
+        print('Images list 1 and 2 shape:', imag1_list.shape, imag2_list.shape)
+        # Convert to float 32 data type
+        imag1_list = imag1_list.astype('float32')
+        imag2_list = imag2_list.astype('float32')
+        # Scaling the images
+        imag1_list = scale_images(imag1_list, (299,299,3))
+        imag2_list = scale_images(imag2_list, (299,299,3))
+        print('Scaled', imag1_list.shape, imag2_list.shape)
+        imag1_list = preprocess_input(imag1_list)
+        imag2_list = preprocess_input(imag2_list)
+        # fid bteween the same dataset
+        fid_same = fid_Value(model_FID, imag1_list, imag1_list)
+        print('FID for same image list: %.3f' % fid_same)
+        # fid between both image sets
+        fid_different = fid_Value(model_FID, imag1_list, imag2_list)
+        print('FID for different image list: %.3f' % fid_different)
         
     ########################################
     
@@ -1230,10 +1219,10 @@ if __name__ == '__main__':
         num_of_Images = 5000
         images_Incep = load_Single_Images_Created(NPZ_Images_Generated_Folder,num_of_Images)
         shuffle(images_Incep)
-        print('\nloaded: ', images_Incep.shape)
-        # calculate inception score
-        is_avg, is_std = calculate_inception_score(images_Incep)
-        print('\nInception Score: ', is_avg, is_std)
+        print('\nImages Shape: ', images_Incep.shape)
+        # Inception Score
+        Inception_Score_Avg, Inception_Score_std = inception_score_value(images_Incep)
+        print('\nInception Score: ', Inception_Score_Avg, Inception_Score_std)
     
     #####################################################
     
